@@ -4,11 +4,11 @@ An independent GPU kernel benchmark framework with interface compatibility to SO
 
 ## Features
 
-- **Schema Compatible**: Uses the same `definition.json`, `workload.jsonl`, `solution.json` formats
-- **Multi-Language Support**: Python, Triton, CUDA C++, CuTe DSL
-- **Correctness Checking**: Numerical validation with configurable tolerance
-- **Performance Benchmarking**: CUDA events-based timing
-- **Modular Architecture**: Clean separation of data models, benchmarking, and execution
+- **Schema compatible**: `definition.json`, `workload.jsonl`, `solution.json` align with SOL-ExecBench-style contracts
+- **Drivers included**: PyTorch / Python solutions (import + run); **CUDA C++** via `torch.utils.cpp_extension` (Torch binding, `.cu` sources)
+- **Correctness**: Per-workload `atol` / `rtol`, optional match ratio and error cap (see `ToleranceSpec`)
+- **Performance**: GPU timing with CUDA events (warmup + repeated runs)
+- **Modular layout**: Pydantic models, bench core, CLI, and `ProblemPackager` driver
 
 ## Installation
 
@@ -19,25 +19,48 @@ pip install -e .
 
 Requirements:
 - Python >= 3.10
-- PyTorch >= 2.0
-- CUDA-capable GPU (for GPU kernel testing)
+- PyTorch >= 2.0 (with CUDA build for GPU examples)
+- NVIDIA driver + CUDA toolkit matching PyTorch (for **CUDA C++** extensions: `nvcc`, often **ninja**)
+- CUDA-capable GPU for GPU workloads
 
 ## Quick Start
 
-### 1. Run the Example
+### 1. Run the RMSNorm examples
 
-We provide a complete `rmsnorm` example to demonstrate the workflow:
+Problems live under `examples/<problem>/` with **shared** `definition.json` and `workload.jsonl`. Each **backend** has its own subdirectory and `solution.json`:
+
+```
+examples/rmsnorm/
+├── definition.json
+├── workload.jsonl
+├── pytorch/          # PyTorch reference-style kernel
+│   ├── kernel.py
+│   └── solution.json
+├── cuda_cpp/         # CUDA extension (Torch + pybind)
+│   ├── kernel.cu
+│   └── solution.json
+└── triton/           # placeholder for your Triton port
+```
+
+**PyTorch:**
 
 ```bash
 cd /home/zhangxa/codes/hpc_bench
 
-# Run single problem evaluation
 hpc-bench examples/rmsnorm --solution examples/rmsnorm/pytorch/solution.json
 
-# Or with PYTHONPATH
+# Or without installing the package:
 PYTHONPATH=src python -m hpc_bench.cli examples/rmsnorm \
   --solution examples/rmsnorm/pytorch/solution.json
 ```
+
+**CUDA C++** (same problem dir, different solution file):
+
+```bash
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/cuda_cpp/solution.json
+```
+
+Use **`.cu`** for files that include CUDA device code so `nvcc` is used. If `spec.target_hardware` contains `LOCAL`, the driver adds `-gencode=arch=compute_XX,code=sm_XX` from your GPU’s compute capability.
 
 Expected output:
 ```
@@ -115,6 +138,10 @@ Your kernel implementation:
 }
 ```
 
+**Source files:** `sources[].content` is optional. If omitted, the CLI reads `path` relative to the directory that contains `solution.json` (recommended for readability). You can still inline `content` for small snippets or tests.
+
+**CUDA C++:** set `"languages": ["cuda_cpp"]`, `"binding": "torch"`, optional `compile_options` (`cuda_cflags`, `cflags`, `ld_flags`), and `entry_point` like `"kernel.cu::run"`. After `compile()`, the driver reuses the module returned by `torch.utils.cpp_extension.load` so it stays consistent with PyTorch’s extension naming (e.g. `benchmark_kernel_v1.so`).
+
 ## Usage Guide
 
 ### Single Problem Evaluation
@@ -122,12 +149,14 @@ Your kernel implementation:
 #### Method 1: Problem Directory
 
 ```bash
-hpc-bench <problem_dir> --solution solution.json
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/pytorch/solution.json
 ```
 
-The directory must contain:
-- `definition.json` - Problem specification
-- `workload.jsonl` - Test configurations
+The problem directory must contain:
+- `definition.json` — operator spec and embedded `reference` code
+- `workload.jsonl` — one JSON object per line (workloads)
+
+The `--solution` path is independent: it can live in a backend subfolder (as in the examples).
 
 #### Method 2: Explicit Paths
 
@@ -215,8 +244,18 @@ def run(input, weight, eps, output):
     "destination_passing_style": true,
     "dependencies": ["torch"]
   },
-  "sources": [{"path": "kernel.py", "content": "<file_content>"}]
+  "sources": [{"path": "kernel.py"}]
 }
+```
+
+(`kernel.py` next to `solution.json`; content loaded automatically.)
+
+#### CUDA C++ (Torch extension) sketch
+
+See `examples/rmsnorm/cuda_cpp/`. The entry point must match the benchmark convention (here **DPS**: last tensor argument is the pre-allocated output):
+
+```cpp
+void run(torch::Tensor input, torch::Tensor weight, float eps, torch::Tensor output);
 ```
 
 #### Triton Example
@@ -334,43 +373,36 @@ Each workload produces a trace:
 
 ### Tolerance Formula
 
-Numerical correctness uses the `allclose` formula:
+Element-wise check (torch.allclose style):
 
 ```
 |output - reference| <= atol + rtol * |reference|
 ```
 
-With default tolerance:
-- `atol` (absolute tolerance): 1e-3
-- `rtol` (relative tolerance): 1e-3
-- `required_matched_ratio`: 99% of elements must pass
+Per workload, `tolerance` in `workload.jsonl` overrides the schema defaults. Built-in defaults (when a field is omitted) are `max_atol=1e-2`, `max_rtol=1e-2`, `required_matched_ratio=0.99`. The RMSNorm examples use `1e-3` / `1e-3` explicitly.
 
 ## Project Structure
 
 ```
 hpc_bench/
 ├── docs/
-│   └── arch.md           # Detailed architecture documentation
+│   └── arch.md              # Architecture & interface details
 ├── examples/
-│   └── rmsnorm/          # Complete working example
+│   └── rmsnorm/
 │       ├── definition.json
 │       ├── workload.jsonl
-│       └── solution_pytorch.json
+│       ├── pytorch/         # kernel.py + solution.json
+│       ├── cuda_cpp/        # kernel.cu + solution.json
+│       └── triton/
 ├── scripts/
-│   └── run_dataset.py    # Batch evaluation script
+│   └── run_dataset.py       # Batch evaluation helper
+├── tests/
+│   └── e2e/                 # pytest end-to-end tests
 ├── src/hpc_bench/
-│   ├── cli.py            # Command-line interface
+│   ├── cli.py
 │   ├── core/
-│   │   ├── data/         # Data models
-│   │   │   ├── definition.py
-│   │   │   ├── workload.py
-│   │   │   ├── solution.py
-│   │   │   └── trace.py
-│   │   └── bench/        # Benchmarking logic
-│   │       ├── correctness.py
-│   │       ├── timing.py
-│   │       ├── io.py
-│   │       └── config.py
+│   │   ├── data/            # definition, workload, solution, trace, …
+│   │   └── bench/           # correctness, timing, io, config
 │   └── driver/
 │       └── problem_packager.py
 └── pyproject.toml
@@ -396,11 +428,28 @@ Reduce workload batch sizes or use `--max-workloads` to limit concurrent tests.
 
 ### Compilation Errors (C++/CUDA)
 
-Ensure `nvcc` is in PATH and CUDA toolkit is properly installed:
+- Install a CUDA toolkit compatible with your PyTorch build; check `nvcc --version` and `nvidia-smi`.
+- Install **ninja** if PyTorch’s extension build fails (`pip install ninja` or distro package).
+- Device code must be in **`.cu`** files so `nvcc` compiles them; plain `.cpp` may invoke the host compiler only and miss `cuda_runtime.h`.
+- If you see errors about virtual architectures, ensure the driver uses `-gencode=arch=compute_XX,code=sm_XX` (the packager does this for `LOCAL`).
+
+### Stale `hpc-bench` after git pull
+
+Reinstall or run from source so CLI matches the repo:
+
 ```bash
-nvcc --version
-nvidia-smi
+pip install -e .
+# or: PYTHONPATH=src python -m hpc_bench.cli ...
 ```
+
+### Tests
+
+```bash
+pip install pytest
+PYTHONPATH=src pytest tests/
+```
+
+CUDA-heavy e2e tests are marked `@pytest.mark.cuda`; use `pytest -m "not cuda"` on CPU-only machines.
 
 ## Advanced Topics
 
