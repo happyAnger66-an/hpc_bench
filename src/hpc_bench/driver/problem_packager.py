@@ -46,6 +46,8 @@ class ProblemPackager:
         self.solution = solution
         self.output_dir = Path(output_dir)
         self.staging_dir: Optional[Path] = None
+        # Set in compile(); avoids importlib/PyInit mismatch when torch renames the .so (e.g. _v1).
+        self._compiled_extension_module: Optional[Any] = None
 
     @staticmethod
     def _compute_capability_to_suffix(compute_cap: str) -> Optional[int]:
@@ -84,6 +86,7 @@ class ProblemPackager:
 
     def package(self) -> Path:
         """Create the staging directory with all necessary files."""
+        self._compiled_extension_module = None
         self.staging_dir = self.output_dir
         self.staging_dir.mkdir(parents=True, exist_ok=True)
 
@@ -144,9 +147,9 @@ class ProblemPackager:
         # Get source files
         source_files = [str(self.staging_dir / s.path) for s in self.solution.sources]
 
-        # Compile extension
+        # Compile extension; keep module handle so execute() matches PyInit_* after torch suffixes name.
         try:
-            load(
+            self._compiled_extension_module = load(
                 name="benchmark_kernel",
                 sources=source_files,
                 extra_cflags=extra_cflags,
@@ -206,21 +209,19 @@ class ProblemPackager:
         entry_file, entry_func = entry_point.split("::")
 
         if _is_cpp_language(self.solution.spec.languages):
-            # Load compiled C++ extension
-            so_files = list(self.staging_dir.glob("*.so"))
-            if not so_files:
-                raise RuntimeError(
-                    "No compiled .so file found. "
-                    "Ensure compile() was called before execute()."
-                )
-
-            # Load the extension module
-            so_path = so_files[0]
-            spec = importlib.util.spec_from_file_location(
-                "benchmark_kernel", so_path
-            )
-            user_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(user_module)
+            user_module = self._compiled_extension_module
+            if user_module is None:
+                so_files = list(self.staging_dir.glob("*.so"))
+                if not so_files:
+                    raise RuntimeError(
+                        "No compiled .so file found. "
+                        "Ensure compile() was called before execute()."
+                    )
+                so_path = max(so_files, key=lambda p: p.stat().st_mtime)
+                # Stem must match TORCH_EXTENSION_NAME / PyInit_* inside the .so.
+                spec = importlib.util.spec_from_file_location(so_path.stem, so_path)
+                user_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(user_module)
             user_fn = getattr(user_module, entry_func)
         else:
             # Import Python module

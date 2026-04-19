@@ -37,7 +37,7 @@ class TestCUDARMSNormExample:
     def test_cuda_solution_loads(self):
         """Test that CUDA solution.json loads correctly."""
         solution_path = CUDA_EXAMPLE_DIR / "solution.json"
-        assert solution_path.exists(), f"solution_cuda.json not found at {solution_path}"
+        assert solution_path.exists(), f"solution.json not found at {solution_path}"
 
         solution_data = load_json_file(solution_path)
 
@@ -64,7 +64,7 @@ class TestCUDARMSNormExample:
         """Test that CUDA kernel compiles successfully."""
         definition = Definition(**load_json_file(RMSNORM_DIR / "definition.json"))
 
-        solution_data = load_json_file(CUDA_EXAMPLE_DIR / "solution_cuda.json")
+        solution_data = load_json_file(CUDA_EXAMPLE_DIR / "solution.json")
         for source in solution_data.get("sources", []):
             if source.get("content") is None:
                 source_path = CUDA_EXAMPLE_DIR / source["path"]
@@ -99,7 +99,7 @@ class TestCUDARMSNormExample:
         from hpc_bench.core.data import Workload
         workloads = [Workload(**workloads[0])]
 
-        solution_data = load_json_file(CUDA_EXAMPLE_DIR / "solution_cuda.json")
+        solution_data = load_json_file(CUDA_EXAMPLE_DIR / "solution.json")
         for source in solution_data.get("sources", []):
             if source.get("content") is None:
                 source_path = CUDA_EXAMPLE_DIR / source["path"]
@@ -122,12 +122,12 @@ class TestCUDARMSNormExample:
             assert len(traces) == 1
 
             trace = traces[0]
-            status = trace.get("evaluation", {}).get("status")
+            status = (trace.get("evaluation") or {}).get("status")
             assert status == EvaluationStatus.PASSED.value, \
                 f"CUDA kernel failed: {trace}"
 
             # Check that we got performance metrics
-            perf = trace.get("evaluation", {}).get("performance", {})
+            perf = (trace.get("evaluation") or {}).get("performance") or {}
             assert "latency_ms" in perf
             assert perf["latency_ms"] > 0
 
@@ -136,7 +136,7 @@ class TestCUDARMSNormExample:
         definition = Definition(**load_json_file(RMSNORM_DIR / "definition.json"))
 
         # Load both solutions
-        cuda_solution_data = load_json_file(CUDA_EXAMPLE_DIR / "solution_cuda.json")
+        cuda_solution_data = load_json_file(CUDA_EXAMPLE_DIR / "solution.json")
         for source in cuda_solution_data.get("sources", []):
             if source.get("content") is None:
                 source["content"] = (CUDA_EXAMPLE_DIR / source["path"]).read_text()
