@@ -1,0 +1,3 @@
+{"uuid": "rmsnorm_wkl_1", "axes": {"batch_size": 1}, "inputs": {"input": {"type": "random"}, "weight": {"type": "random"}, "eps": {"type": "scalar", "value": 1e-6}}, "tolerance": {"max_atol": 1e-3, "max_rtol": 1e-3}}
+{"uuid": "rmsnorm_wkl_2", "axes": {"batch_size": 16}, "inputs": {"input": {"type": "random"}, "weight": {"type": "random"}, "eps": {"type": "scalar", "value": 1e-6}}, "tolerance": {"max_atol": 1e-3, "max_rtol": 1e-3}}
+{"uuid": "rmsnorm_wkl_3", "axes": {"batch_size": 128}, "inputs": {"input": {"type": "random"}, "weight": {"type": "random"}, "eps": {"type": "scalar", "value": 1e-6}}, "tolerance": {"max_atol": 1e-3, "max_rtol": 1e-3}}
