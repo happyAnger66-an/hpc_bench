@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = ["nvidia-cuda-runtime-cu12"]
+triton = ["triton>=2.3"]
 
 [project.scripts]
 hpc-bench = "hpc_bench.cli:main"

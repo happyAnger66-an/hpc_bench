@@ -1,0 +1,14 @@
+{
+  "name": "rmsnorm_cute_dsl_v1",
+  "definition": "rmsnorm_h4096",
+  "author": "hpc_bench",
+  "description": "RMSNorm: PyTorch rstd + CuTe DSL bf16 elementwise multiply",
+  "spec": {
+    "languages": ["cute_dsl"],
+    "target_hardware": ["LOCAL", "B200"],
+    "entry_point": "kernel.py::run",
+    "destination_passing_style": true,
+    "dependencies": ["torch", "cutlass"]
+  },
+  "sources": [{ "path": "kernel.py" }]
+}

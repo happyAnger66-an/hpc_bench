@@ -144,6 +144,25 @@ class ProblemPackager:
                     f"-gencode=arch=compute_{cap},code=sm_{cap}"
                 )
 
+        langs = self.solution.spec.languages
+        if SupportedLanguages.CUTLASS in langs:
+            cutlass_path = os.environ.get("CUTLASS_PATH")
+            if cutlass_path:
+                inc = os.path.join(cutlass_path, "include")
+                if os.path.isdir(inc):
+                    extra_cuda_cflags.append(f"-I{inc}")
+        if SupportedLanguages.CUDNN in langs:
+            cuda_home = os.environ.get("CUDA_HOME", "/usr/local/cuda")
+            inc = os.path.join(cuda_home, "include")
+            lib64 = os.path.join(cuda_home, "lib64")
+            if os.path.isdir(inc):
+                extra_cuda_cflags.append(f"-I{inc}")
+            if os.path.isdir(lib64):
+                extra_ldflags.append(f"-L{lib64}")
+            ld_joined = " ".join(extra_ldflags)
+            if "-lcudnn" not in ld_joined:
+                extra_ldflags.append("-lcudnn")
+
         # Get source files
         source_files = [str(self.staging_dir / s.path) for s in self.solution.sources]
 

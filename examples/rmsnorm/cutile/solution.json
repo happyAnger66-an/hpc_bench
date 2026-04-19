@@ -1,0 +1,14 @@
+{
+  "name": "rmsnorm_cutile_v1",
+  "definition": "rmsnorm_h4096",
+  "author": "hpc_bench",
+  "description": "RMSNorm: PyTorch rstd + cuTile bf16 elementwise multiply",
+  "spec": {
+    "languages": ["cutile"],
+    "target_hardware": ["LOCAL", "B200"],
+    "entry_point": "kernel.py::run",
+    "destination_passing_style": true,
+    "dependencies": ["torch", "cutile"]
+  },
+  "sources": [{ "path": "kernel.py" }]
+}

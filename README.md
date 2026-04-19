@@ -33,13 +33,13 @@ Problems live under `examples/<problem>/` with **shared** `definition.json` and 
 examples/rmsnorm/
 ├── definition.json
 ├── workload.jsonl
-├── pytorch/          # PyTorch reference-style kernel
-│   ├── kernel.py
-│   └── solution.json
-├── cuda_cpp/         # CUDA extension (Torch + pybind)
-│   ├── kernel.cu
-│   └── solution.json
-└── triton/           # placeholder for your Triton port
+├── pytorch/          # PyTorch
+├── cuda_cpp/         # CUDA + pybind
+├── triton/           # Triton
+├── cute_dsl/         # CuTe DSL (PyTorch rstd + cute elementwise mul); needs `cutlass` PyPI stack
+├── cutile/           # cuTile (`cuda.tile`); NVIDIA toolkit wheel
+├── cutlass/          # SOL-style “cutlass” tag + CUDA kernel; optional `CUTLASS_PATH` for headers
+└── cudnn/            # cuDNN OpTensor (x²) + Reduce (row sum) + CUDA rsqrt/scale; libcudnn
 ```
 
 **PyTorch:**
@@ -60,7 +60,22 @@ PYTHONPATH=src python -m hpc_bench.cli examples/rmsnorm \
 hpc-bench examples/rmsnorm --solution examples/rmsnorm/cuda_cpp/solution.json
 ```
 
-Use **`.cu`** for files that include CUDA device code so `nvcc` is used. If `spec.target_hardware` contains `LOCAL`, the driver adds `-gencode=arch=compute_XX,code=sm_XX` from your GPU’s compute capability.
+**Triton** (needs `pip install triton` or `pip install -e ".[triton]"`):
+
+```bash
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/triton/solution.json
+```
+
+**CuTe DSL / cuTile / CUTLASS-tagged / cuDNN** (optional stacks — see subfolders):
+
+```bash
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/cute_dsl/solution.json
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/cutile/solution.json
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/cutlass/solution.json   # optional: export CUTLASS_PATH
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/cudnn/solution.json      # needs cuDNN dev libs
+```
+
+Use **`.cu`** for files that include CUDA device code so `nvcc` is used. If `spec.target_hardware` contains `LOCAL`, the driver adds `-gencode=arch=compute_XX,code=sm_XX` from your GPU’s compute capability. For **cuDNN** extensions the driver also adds `-I/-L` from `CUDA_HOME` and links `-lcudnn` when missing from `solution.json`.
 
 Expected output:
 ```
@@ -391,9 +406,13 @@ hpc_bench/
 │   └── rmsnorm/
 │       ├── definition.json
 │       ├── workload.jsonl
-│       ├── pytorch/         # kernel.py + solution.json
-│       ├── cuda_cpp/        # kernel.cu + solution.json
-│       └── triton/
+│       ├── pytorch/
+│       ├── cuda_cpp/
+│       ├── triton/
+│       ├── cute_dsl/
+│       ├── cutile/
+│       ├── cutlass/
+│       └── cudnn/
 ├── scripts/
 │   └── run_dataset.py       # Batch evaluation helper
 ├── tests/
