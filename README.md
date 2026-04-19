@@ -32,11 +32,11 @@ We provide a complete `rmsnorm` example to demonstrate the workflow:
 cd /home/zhangxa/codes/hpc_bench
 
 # Run single problem evaluation
-hpc-bench examples/rmsnorm --solution examples/rmsnorm/solution_pytorch.json
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/pytorch/solution.json
 
 # Or with PYTHONPATH
 PYTHONPATH=src python -m hpc_bench.cli examples/rmsnorm \
-  --solution examples/rmsnorm/solution_pytorch.json
+  --solution examples/rmsnorm/pytorch/solution.json
 ```
 
 Expected output:

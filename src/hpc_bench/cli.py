@@ -138,7 +138,19 @@ def cli(
         console.print("[yellow]Warning: No workloads loaded[/yellow]")
 
     try:
-        solution_obj = Solution(**load_json_file(solution))
+        solution_data = load_json_file(solution)
+        # Load source file contents if not provided inline
+        solution_dir = solution.parent
+        for source in solution_data.get("sources", []):
+            if source.get("content") is None:
+                source_path = solution_dir / source["path"]
+                if not source_path.exists():
+                    raise FileNotFoundError(
+                        f"Source file not found: {source_path}. "
+                        f"Provide inline content or ensure file exists."
+                    )
+                source["content"] = source_path.read_text()
+        solution_obj = Solution(**solution_data)
     except Exception as e:
         console.print(f"[red]Error loading solution: {e}[/red]")
         raise click.Exit(1)
@@ -216,10 +228,11 @@ def cli(
             table.add_column("Speedup", justify="right")
 
             for trace in traces:
-                workload_uuid = trace.get("workload", {}).get("uuid", "unknown")
-                eval_data = trace.get("evaluation", {})
+                workload = trace.get("workload") or {}
+                workload_uuid = workload.get("uuid", "unknown")
+                eval_data = trace.get("evaluation") or {}
                 status = eval_data.get("status", "UNKNOWN")
-                perf = eval_data.get("performance", {})
+                perf = eval_data.get("performance") or {}
                 latency = perf.get("latency_ms", 0.0)
                 speedup = perf.get("speedup_factor", 0.0)
 
@@ -243,7 +256,8 @@ def cli(
 
         # Exit with error if any workload failed
         all_passed = all(
-            trace.get("evaluation", {}).get("status") == EvaluationStatus.PASSED.value
+            (trace.get("evaluation") or {}).get("status")
+            == EvaluationStatus.PASSED.value
             for trace in traces
         )
         if not all_passed:

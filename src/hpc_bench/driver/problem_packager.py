@@ -47,8 +47,29 @@ class ProblemPackager:
         self.output_dir = Path(output_dir)
         self.staging_dir: Optional[Path] = None
 
-    def _get_local_sm(self) -> Optional[str]:
-        """Detect the local GPU's SM version."""
+    @staticmethod
+    def _compute_capability_to_suffix(compute_cap: str) -> Optional[int]:
+        """Parse nvidia-smi compute_cap (e.g. '8.9', '7.5') to XY for compute_XY/sm_XY."""
+        s = compute_cap.strip()
+        if not s:
+            return None
+        parts = s.split(".")
+        try:
+            major = int(parts[0])
+            minor = int(parts[1]) if len(parts) > 1 else 0
+        except (ValueError, IndexError):
+            return None
+        # e.g. 8.9 -> 89, 8.0 -> 80, 7.5 -> 75
+        return major * 10 + minor
+
+    def _get_local_capability_suffix(self) -> Optional[int]:
+        """GPU capability as single integer (e.g. 89); used in nvcc -gencode."""
+        if torch.cuda.is_available():
+            try:
+                major, minor = torch.cuda.get_device_capability(0)
+                return major * 10 + minor
+            except Exception:
+                pass
         try:
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
@@ -56,8 +77,8 @@ class ProblemPackager:
                 text=True,
                 check=True,
             )
-            cc = result.stdout.strip().split(".")[0]
-            return f"sm_{cc}"
+            line = result.stdout.strip().splitlines()[0].strip()
+            return self._compute_capability_to_suffix(line)
         except Exception:
             return None
 
@@ -95,16 +116,47 @@ class ProblemPackager:
         return self.staging_dir
 
     def compile(self, timeout: int = 300) -> None:
-        """Compile C++/CUDA sources if needed."""
+        """Compile C++/CUDA sources using torch.utils.cpp_extension."""
         if not _is_cpp_language(self.solution.spec.languages):
             return
 
         if self.staging_dir is None:
             raise RuntimeError("Must call package() before compile()")
 
-        # For Python-based solutions with C++ extensions, use torch.utils.cpp_extension
-        # This is a simplified version - full implementation would need more handling
-        pass
+        from torch.utils.cpp_extension import load
+
+        # Get compile options from solution spec
+        compile_options = self.solution.spec.compile_options
+        extra_cflags = compile_options.cflags if compile_options else []
+        extra_cuda_cflags = compile_options.cuda_cflags if compile_options else ["-O3", "--use_fast_math"]
+        extra_ldflags = compile_options.ld_flags if compile_options else ["-lcuda"]
+
+        # Detect local SM if target includes LOCAL
+        target_hw = {h.upper() for h in self.solution.spec.target_hardware}
+        if "LOCAL" in target_hw:
+            cap = self._get_local_capability_suffix()
+            if cap is not None:
+                # arch= must be virtual (compute_XX); code= is sm_XX (nvcc 12+ enforces this)
+                extra_cuda_cflags.append(
+                    f"-gencode=arch=compute_{cap},code=sm_{cap}"
+                )
+
+        # Get source files
+        source_files = [str(self.staging_dir / s.path) for s in self.solution.sources]
+
+        # Compile extension
+        try:
+            load(
+                name="benchmark_kernel",
+                sources=source_files,
+                extra_cflags=extra_cflags,
+                extra_cuda_cflags=extra_cuda_cflags,
+                extra_ldflags=extra_ldflags,
+                build_directory=str(self.staging_dir),
+                verbose=True,
+            )
+        except Exception as e:
+            raise RuntimeError(f"C++/CUDA compilation failed: {e}") from e
 
     def execute(
         self,
@@ -154,8 +206,22 @@ class ProblemPackager:
         entry_file, entry_func = entry_point.split("::")
 
         if _is_cpp_language(self.solution.spec.languages):
-            # For C++ solutions, we would need to load the compiled extension
-            raise NotImplementedError("C++ language execution not yet implemented")
+            # Load compiled C++ extension
+            so_files = list(self.staging_dir.glob("*.so"))
+            if not so_files:
+                raise RuntimeError(
+                    "No compiled .so file found. "
+                    "Ensure compile() was called before execute()."
+                )
+
+            # Load the extension module
+            so_path = so_files[0]
+            spec = importlib.util.spec_from_file_location(
+                "benchmark_kernel", so_path
+            )
+            user_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(user_module)
+            user_fn = getattr(user_module, entry_func)
         else:
             # Import Python module
             sys.path.insert(0, str(self.staging_dir))

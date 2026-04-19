@@ -39,10 +39,15 @@ class SupportedBindings(str, Enum):
 
 
 class SourceFile(BaseModelWithDocstrings):
-    """A single source code file in a solution implementation."""
+    """A single source code file in a solution implementation.
+
+    Supports two modes:
+    - Inline mode: both path and content provided, content is embedded
+    - File mode: only path provided, content loaded from filesystem
+    """
 
     path: NonEmptyString
-    content: NonEmptyString
+    content: Optional[str] = Field(default=None)
 
     @model_validator(mode="after")
     def _validate_source_path(self) -> "SourceFile":

@@ -12,8 +12,7 @@
   },
   "sources": [
     {
-      "path": "kernel.py",
-      "content": "import torch\n\ndef run(input, weight, eps, output):\n    variance = input.to(torch.float32).pow(2).mean(-1, keepdim=True)\n    rstd = torch.rsqrt(variance + eps)\n    hidden_states = input * rstd\n    output[:] = (hidden_states * weight).to(input.dtype)"
+      "path": "kernel.py"
     }
   ]
 }
