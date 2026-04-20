@@ -1,215 +1,202 @@
 # hpc_bench
 
-An independent GPU kernel benchmark framework with interface compatibility to SOL-ExecBench.
+Independent GPU kernel benchmark framework with **data formats and CLI workflow** aligned to **SOL-ExecBench**-style `definition` / `workload` / `solution` / `trace` contracts. This repository implements evaluation **without** depending on the SOL-ExecBench package.
+
+**What it does:** load a problem (`definition.json` + `workload.jsonl`), load your kernel (`solution.json`), optionally compile CUDA extensions, run **correctness** checks against the embedded reference, then **time** the kernel with CUDA events and emit JSON traces.
+
+## Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [CLI](#cli)
+- [How evaluation works](#how-evaluation-works)
+- [Quick start (RMSNorm)](#quick-start-rmsnorm)
+- [Data formats](#data-formats)
+- [Solution contracts (DPS)](#solution-contracts-dps)
+- [Backend / language notes](#backend--language-notes)
+- [Usage](#usage)
+- [Results & traces](#results--traces)
+- [Project layout](#project-layout)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Documentation](#documentation)
 
 ## Features
 
-- **Schema compatible**: `definition.json`, `workload.jsonl`, `solution.json` align with SOL-ExecBench-style contracts
-- **Drivers included**: PyTorch / Python solutions (import + run); **CUDA C++** via `torch.utils.cpp_extension` (Torch binding, `.cu` sources)
-- **Correctness**: Per-workload `atol` / `rtol`, optional match ratio and error cap (see `ToleranceSpec`)
-- **Performance**: GPU timing with CUDA events (warmup + repeated runs)
-- **Modular layout**: Pydantic models, bench core, CLI, and `ProblemPackager` driver
+- **Schema-oriented**: Pydantic models for Definition, Workload, Solution, Trace (SOL-ExecBench-compatible shapes).
+- **Python solutions**: `pytorch`, `triton`, `cute_dsl`, `cutile` — import `kernel.py` (or equivalent) and call `entry_point`.
+- **C++/CUDA extensions**: `cuda_cpp`, `cutlass`, `cudnn`, `cublas` (schema) — build via `torch.utils.cpp_extension.load`, bind with `torch` + pybind11.
+- **Correctness**: Per-workload `max_atol` / `max_rtol`, `required_matched_ratio`, optional `max_error_cap` (`ToleranceSpec`).
+- **Performance**: Warmup + repeated runs; GPU timing via CUDA events; speedup vs reference when reference timing succeeds.
+- **Driver**: `ProblemPackager` stages files, compiles when needed, executes in-process, returns trace dicts.
 
 ## Installation
 
 ```bash
-cd /home/zhangxa/codes/hpc_bench
+git clone <your-fork-or-mirror>
+cd hpc_bench
 pip install -e .
 ```
 
-Requirements:
-- Python >= 3.10
-- PyTorch >= 2.0 (with CUDA build for GPU examples)
-- NVIDIA driver + CUDA toolkit matching PyTorch (for **CUDA C++** extensions: `nvcc`, often **ninja**)
-- CUDA-capable GPU for GPU workloads
+**Base requirements**
 
-## Quick Start
+- Python ≥ 3.10  
+- PyTorch ≥ 2.0 (CUDA build recommended for GPU examples)  
+- For **CUDA extensions**: NVIDIA driver, CUDA toolkit matching PyTorch, `nvcc`; **`ninja`** is often required for PyTorch’s JIT build.
 
-### 1. Run the RMSNorm examples
+**Optional extras**
 
-Problems live under `examples/<problem>/` with **shared** `definition.json` and `workload.jsonl`. Each **backend** has its own subdirectory and `solution.json`:
+```bash
+pip install -e ".[triton]"   # Triton examples
+```
+
+Other stacks (CuTe DSL, cuTile, CUTLASS headers, cuDNN) use separate wheels or system installs — see [Backend / language notes](#backend--language-notes).
+
+## CLI
+
+Two entry points (same implementation):
+
+| Command | Purpose |
+|---------|---------|
+| `hpc-bench` | Primary CLI |
+| `sol-execbench` | Drop-in alias for compatibility |
+
+Invoke module without install:
+
+```bash
+PYTHONPATH=src python -m hpc_bench.cli <args>
+```
+
+## How evaluation works
+
+1. **Load problem**: `definition.json` + `workload.jsonl` (from `PROBLEM_DIR` or `--definition` / `--workload`).
+2. **Load solution**: `solution.json`; if `sources[].content` is omitted, the CLI reads `sources[].path` relative to the **directory containing `solution.json`**.
+3. **Stage**: Write definition, workloads, solution, and sources into a temp directory (`hpc_bench_*`, or a kept path with `--keep-staging`).
+4. **Compile** (if `languages` include `cuda_cpp`, `cutlass`, `cudnn`, …): `torch.utils.cpp_extension.load`; for `LOCAL` hardware, append `-gencode=arch=compute_XX,code=sm_XX` from the device capability.
+5. **Execute**: Run reference `run(...)` and your `run(...)` per workload; compare outputs; if correct, benchmark and append `performance` to the trace.
+
+## Quick start (RMSNorm)
+
+Problems live under `examples/<problem>/` with shared `definition.json` and `workload.jsonl`. Each **backend** has its own subdirectory and `solution.json`:
 
 ```
 examples/rmsnorm/
 ├── definition.json
 ├── workload.jsonl
-├── pytorch/          # PyTorch
-├── cuda_cpp/         # CUDA + pybind
-├── triton/           # Triton
-├── cute_dsl/         # CuTe DSL (PyTorch rstd + cute elementwise mul); needs `cutlass` PyPI stack
-├── cutile/           # cuTile (`cuda.tile`); NVIDIA toolkit wheel
-├── cutlass/          # SOL-style “cutlass” tag + CUDA kernel; optional `CUTLASS_PATH` for headers
-└── cudnn/            # cuDNN OpTensor (x²) + Reduce (row sum) + CUDA rsqrt/scale; libcudnn
+├── pytorch/
+├── cuda_cpp/
+├── triton/
+├── cute_dsl/
+├── cutile/
+├── cutlass/
+└── cudnn/
 ```
 
-**PyTorch:**
+**PyTorch**
 
 ```bash
-cd /home/zhangxa/codes/hpc_bench
-
 hpc-bench examples/rmsnorm --solution examples/rmsnorm/pytorch/solution.json
-
-# Or without installing the package:
-PYTHONPATH=src python -m hpc_bench.cli examples/rmsnorm \
-  --solution examples/rmsnorm/pytorch/solution.json
 ```
 
-**CUDA C++** (same problem dir, different solution file):
+**CUDA C++** (device code in `.cu`)
 
 ```bash
 hpc-bench examples/rmsnorm --solution examples/rmsnorm/cuda_cpp/solution.json
 ```
 
-**Triton** (needs `pip install triton` or `pip install -e ".[triton]"`):
+**Triton**
 
 ```bash
+pip install triton   # or: pip install -e ".[triton]"
 hpc-bench examples/rmsnorm --solution examples/rmsnorm/triton/solution.json
 ```
 
-**CuTe DSL / cuTile / CUTLASS-tagged / cuDNN** (optional stacks — see subfolders):
+**CuTe DSL / cuTile / CUTLASS-tagged / cuDNN** (optional toolchains)
 
 ```bash
 hpc-bench examples/rmsnorm --solution examples/rmsnorm/cute_dsl/solution.json
 hpc-bench examples/rmsnorm --solution examples/rmsnorm/cutile/solution.json
-hpc-bench examples/rmsnorm --solution examples/rmsnorm/cutlass/solution.json   # optional: export CUTLASS_PATH
-hpc-bench examples/rmsnorm --solution examples/rmsnorm/cudnn/solution.json      # needs cuDNN dev libs
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/cutlass/solution.json
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/cudnn/solution.json
 ```
 
-Use **`.cu`** for files that include CUDA device code so `nvcc` is used. If `spec.target_hardware` contains `LOCAL`, the driver adds `-gencode=arch=compute_XX,code=sm_XX` from your GPU’s compute capability. For **cuDNN** extensions the driver also adds `-I/-L` from `CUDA_HOME` and links `-lcudnn` when missing from `solution.json`.
+Expected: a Rich table with per-workload **Status**, **Latency (ms)**, **Speedup** (non-`PASSED` rows may show `N/A` for timing).
 
-Expected output:
-```
-┌─────────────────────────────────────────────────────────────┐
-│          Evaluation Results: rmsnorm_h4096                  │
-├──────────┬───────────┬──────────────┬───────────────────────┤
-│ Workload │ Status    │ Latency (ms) │ Speedup              │
-├──────────┼───────────┼──────────────┼───────────────────────┤
-│ rmsnorm_ │ PASSED    │ 0.234        │ 1.45x                │
-│ rmsnorm_ │ PASSED    │ 0.523        │ 1.38x                │
-│ rmsnorm_ │ PASSED    │ 2.156        │ 1.42x                │
-└──────────┴───────────┴──────────────┴───────────────────────┘
-```
+## Data formats
 
-### 2. Understanding the Data Format
+### `definition.json`
 
-#### Problem Definition (`definition.json`)
+Describes axes, tensor I/O dtypes/shapes, and a **`reference`**: Python source (string) defining `run(...)` that returns outputs (or matches DPS — see below). Used as the numerical ground truth.
 
-Defines the operator interface:
+### `workload.jsonl`
+
+One JSON object per line: `uuid`, `axes` (concrete axis values), `inputs` (e.g. `random`, `scalar`, `safetensors`), and optional `tolerance`.
+
+Example (abbreviated):
 
 ```json
-{
-  "name": "rmsnorm_h4096",
-  "op_type": "rmsnorm",
-  "axes": {
-    "batch_size": {"type": "var"},
-    "hidden_size": {"type": "const", "value": 4096}
-  },
-  "inputs": {
-    "input": {"shape": ["batch_size", "hidden_size"], "dtype": "bfloat16"},
-    "weight": {"shape": ["hidden_size"], "dtype": "bfloat16"},
-    "eps": {"shape": null, "dtype": "float32"}
-  },
-  "outputs": {
-    "output": {"shape": ["batch_size", "hidden_size"], "dtype": "bfloat16"}
-  },
-  "reference": "import torch\ndef run(input, weight, eps): ..."
-}
+{"uuid": "wkl_001", "axes": {"batch_size": 16}, "inputs": {"input": {"type": "random"}, "weight": {"type": "random"}, "eps": {"type": "scalar", "value": 1e-6}}, "tolerance": {"max_atol": 1e-3, "max_rtol": 1e-3}}
 ```
 
-Key fields:
-- `axes`: Variable (`var`) and constant (`const`) dimensions
-- `inputs`/`outputs`: Tensor specifications with shape and dtype
-- `reference`: Ground-truth PyTorch implementation
+### `solution.json`
 
-#### Workload (`workload.jsonl`)
+- **`spec.entry_point`**: `"relative/path.py::function"` or `"kernel.cu::run"`.
+- **`spec.languages`**: e.g. `["pytorch"]`, `["triton"]`, `["cuda_cpp"]`, …
+- **`spec.destination_passing_style`**: if `true`, the last tensor arguments are pre-allocated outputs (DPS).
+- **`sources`**: list of `{ "path": "..." , "content": "..." }`; **`content` may be omitted** — then the CLI loads `path` next to `solution.json`.
+- **C++/CUDA**: optional `binding: "torch"`, `compile_options` (`cflags`, `cuda_cflags`, `ld_flags`).
 
-JSONL format with specific test configurations:
+## Solution contracts (DPS)
 
-```json
-{"uuid": "wkl_001", "axes": {"batch_size": 16}, "inputs": {"eps": {"type": "scalar", "value": 1e-6}}, "tolerance": {"max_atol": 1e-3}}
-```
+- **`destination_passing_style: true`**: implement `run(..., output)` and write into `output` (see `examples/rmsnorm/pytorch/kernel.py`).
+- **`destination_passing_style: false`**: implement `run(...) -> tensor_or_tuple` like the inline `reference` string in examples.
 
-Input types:
-- `"type": "random"` - Generate random tensor
-- `"type": "scalar"` - Use literal value
-- `"type": "safetensors"` - Load from file
+The framework allocates outputs for DPS based on `definition.outputs`.
 
-#### Solution (`solution.json`)
+## Backend / language notes
 
-Your kernel implementation:
+| Backend folder | `languages` | Runtime / build |
+|----------------|-------------|-------------------|
+| `pytorch/` | `pytorch` | Python import |
+| `triton/` | `triton` | Python + Triton JIT |
+| `cute_dsl/` | `cute_dsl` | NVIDIA Cutlass Python / CuTe DSL stack |
+| `cutile/` | `cutile` | `cuda.tile` (cuTile) |
+| `cuda_cpp/` | `cuda_cpp` | `torch.utils.cpp_extension` + `.cu` |
+| `cutlass/` | `cutlass` | Same driver as CUDA; optional **`CUTLASS_PATH`** adds `-I$CUTLASS_PATH/include` during compile |
+| `cudnn/` | `cudnn` | cuDNN **OpTensor** / **ReduceTensor** (see `kernel.cu`) + small CUDA epilogue; **`CUDA_HOME`** used for `-I/-L` if needed |
 
-```json
-{
-  "name": "rmsnorm_pytorch",
-  "definition": "rmsnorm_h4096",
-  "author": "your_name",
-  "spec": {
-    "languages": ["pytorch"],
-    "target_hardware": ["LOCAL"],
-    "entry_point": "kernel.py::run",
-    "destination_passing_style": true
-  },
-  "sources": [{"path": "kernel.py", "content": "..."}]
-}
-```
+**Compile hints**
 
-**Source files:** `sources[].content` is optional. If omitted, the CLI reads `path` relative to the directory that contains `solution.json` (recommended for readability). You can still inline `content` for small snippets or tests.
+- Use **`.cu`** for device code so `nvcc` is used.
+- **`LOCAL`** in `target_hardware` adds correct `-gencode=arch=compute_XX,code=sm_XX` (virtual `compute_`, real `sm_`).
+- After compile, the driver keeps the **`load()` return value** so the loaded module matches PyTorch’s extension name (e.g. `benchmark_kernel_v1.so`).
 
-**CUDA C++:** set `"languages": ["cuda_cpp"]`, `"binding": "torch"`, optional `compile_options` (`cuda_cflags`, `cflags`, `ld_flags`), and `entry_point` like `"kernel.cu::run"`. After `compile()`, the driver reuses the module returned by `torch.utils.cpp_extension.load` so it stays consistent with PyTorch’s extension naming (e.g. `benchmark_kernel_v1.so`).
+## Usage
 
-## Usage Guide
-
-### Single Problem Evaluation
-
-#### Method 1: Problem Directory
+### Problem directory + solution path
 
 ```bash
 hpc-bench examples/rmsnorm --solution examples/rmsnorm/pytorch/solution.json
 ```
 
-The problem directory must contain:
-- `definition.json` — operator spec and embedded `reference` code
-- `workload.jsonl` — one JSON object per line (workloads)
+`PROBLEM_DIR` must contain `definition.json` and `workload.jsonl`. `--solution` may point anywhere (typically a backend subfolder).
 
-The `--solution` path is independent: it can live in a backend subfolder (as in the examples).
-
-#### Method 2: Explicit Paths
+### Explicit paths
 
 ```bash
-hpc-bench \
-  --definition def.json \
-  --workload wkl.jsonl \
-  --solution sol.json \
-  -o results.jsonl \
-  --json
+hpc-bench --definition path/to/definition.json \
+  --workload path/to/workload.jsonl \
+  --solution path/to/solution.json \
+  -o traces.jsonl
 ```
 
-#### Method 3: Using Reference as Solution
-
-To test the reference implementation itself:
+### JSON trace output
 
 ```bash
-hpc-bench examples/rmsnorm \
-  --solution <(echo '{
-    "name": "rmsnorm_ref",
-    "definition": "rmsnorm_h4096",
-    "author": "test",
-    "spec": {
-      "languages": ["pytorch"],
-      "target_hardware": ["LOCAL"],
-      "entry_point": "kernel.py::run",
-      "destination_passing_style": false
-    },
-    "sources": [{
-      "path": "kernel.py",
-      "content": "import torch\ndef run(input, weight, eps):\n    variance = input.to(torch.float32).pow(2).mean(-1, keepdim=True)\n    rstd = torch.rsqrt(variance + eps)\n    hidden_states = input * rstd\n    return (hidden_states * weight).to(input.dtype)"
-    }]
-  }')
+hpc-bench examples/rmsnorm --solution examples/rmsnorm/pytorch/solution.json --json
 ```
 
-### Batch Evaluation
-
-For evaluating multiple problems:
+### Batch helper
 
 ```bash
 python scripts/run_dataset.py data/benchmark \
@@ -219,264 +206,100 @@ python scripts/run_dataset.py data/benchmark \
   --limit 10
 ```
 
-Options:
-- `--category`: Filter by category (L1, L2, FlashInfer-Bench, Quant)
-- `--solution-name`: Look for specific solution file in each problem dir
-- `--limit`: Maximum problems to evaluate
-- `--max-workloads`: Limit workloads per problem
-- `--rerun`: Force re-evaluation of already processed problems
+Options depend on `scripts/run_dataset.py` (e.g. `--max-workloads`, `--rerun`).
 
-### Writing Your Own Solution
-
-#### PyTorch Example
-
-```python
-# kernel.py
-def run(input, weight, eps, output):
-    """RMSNorm kernel with DPS (Destination Passing Style).
-    
-    Args:
-        input: [batch_size, hidden_size] tensor
-        weight: [hidden_size] tensor
-        eps: scalar float
-        output: pre-allocated output tensor [batch_size, hidden_size]
-    """
-    import torch
-    variance = input.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    rstd = torch.rsqrt(variance + eps)
-    output[:] = (input * rstd * weight).to(input.dtype)
-```
-
-```json
-{
-  "name": "rmsnorm_optimized",
-  "definition": "rmsnorm_h4096",
-  "author": "your_name",
-  "spec": {
-    "languages": ["pytorch"],
-    "target_hardware": ["LOCAL", "B200"],
-    "entry_point": "kernel.py::run",
-    "destination_passing_style": true,
-    "dependencies": ["torch"]
-  },
-  "sources": [{"path": "kernel.py"}]
-}
-```
-
-(`kernel.py` next to `solution.json`; content loaded automatically.)
-
-#### CUDA C++ (Torch extension) sketch
-
-See `examples/rmsnorm/cuda_cpp/`. The entry point must match the benchmark convention (here **DPS**: last tensor argument is the pre-allocated output):
-
-```cpp
-void run(torch::Tensor input, torch::Tensor weight, float eps, torch::Tensor output);
-```
-
-#### Triton Example
-
-```python
-# kernel.py
-import triton
-import triton.language as tl
-import torch
-
-@triton.jit
-def rmsnorm_kernel(
-    input_ptr, weight_ptr, output_ptr,
-    stride_m, stride_n,
-    N, eps,
-    BLOCK_SIZE: tl.constexpr
-):
-    row_idx = tl.program_id(0)
-    col_offsets = tl.arange(0, BLOCK_SIZE)
-    mask = col_offsets < N
-    
-    input_ptrs = input_ptr + row_idx * stride_m + col_offsets
-    weight_ptrs = weight_ptr + col_offsets
-    
-    x = tl.load(input_ptrs, mask=mask, other=0.0)
-    w = tl.load(weight_ptrs, mask=mask, other=0.0)
-    
-    var = tl.sum(x * x, axis=0) / N
-    rstd = 1.0 / tl.sqrt(var + eps)
-    
-    out = x * rstd * w
-    tl.store(output_ptr + row_idx * stride_m + col_offsets, out, mask=mask)
-
-def run(input, weight, eps, output):
-    batch_size, hidden_size = input.shape
-    grid = (batch_size,)
-    rmsnorm_kernel[grid](
-        input, weight, output,
-        input.stride(0), input.stride(1),
-        hidden_size, eps,
-        BLOCK_SIZE=triton.next_power_of_2(hidden_size)
-    )
-```
-
-```json
-{
-  "name": "rmsnorm_triton",
-  "definition": "rmsnorm_h4096",
-  "author": "your_name",
-  "spec": {
-    "languages": ["triton"],
-    "target_hardware": ["LOCAL"],
-    "entry_point": "kernel.py::run",
-    "destination_passing_style": true,
-    "dependencies": ["torch", "triton >= 2.3"]
-  },
-  "sources": [{"path": "kernel.py", "content": "<file_content>"}]
-}
-```
-
-### CLI Options Reference
+### CLI options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--solution` | Path to solution.json (required) | - |
-| `--definition` | Path to definition.json | Auto-detect |
-| `--workload` | Path to workload.jsonl | Auto-detect |
-| `--timeout` | Execution timeout (seconds) | 300 |
-| `--compile-timeout` | Compilation timeout (seconds) | 300 |
-| `-o, --output` | Write traces to file | - |
-| `--json` | Print JSON output to stdout | False |
-| `--lock-clocks` | Require GPU clocks locked | False |
-| `--keep-staging` | Keep staging directory | False |
-| `-v, --verbose` | Verbose output | False |
+| `--solution` | Path to `solution.json` (**required**) | — |
+| `--definition` | Path to `definition.json` | From `PROBLEM_DIR` |
+| `--workload` | Path to `workload.jsonl` | From `PROBLEM_DIR` |
+| `--compile-timeout` | C++/CUDA compile timeout (s) | 300 |
+| `--timeout` | Evaluation timeout (s) | 300 |
+| `-o`, `--output` | Write JSONL traces | — |
+| `--json` | Print traces to stdout | off |
+| `--lock-clocks` | Pass through to benchmark config | off |
+| `--keep-staging` | Keep staging dir | off |
+| `-v`, `--verbose` | Print staging path, etc. | off |
 
-## Understanding Results
+## Results & traces
 
-### Trace Format
+Each workload yields a trace dict: `definition`, `solution`, `workload`, `evaluation` (`status`, `device`, optional `message`, `correctness`, `performance`, …).
 
-Each workload produces a trace:
+**Note:** On failures, `evaluation.performance` may be `null`. The CLI treats missing/null nested dicts safely.
 
-```json
-{
-  "definition": "rmsnorm_h4096",
-  "solution": "rmsnorm_optimized",
-  "workload": {"uuid": "wkl_001", "axes": {"batch_size": 16}},
-  "evaluation": {
-    "status": "PASSED",
-    "device": "cuda:0",
-    "correctness": {
-      "max_absolute_error": 0.00098,
-      "max_relative_error": 0.00012,
-      "has_nan": false,
-      "has_inf": false
-    },
-    "performance": {
-      "latency_ms": 0.523,
-      "reference_latency_ms": 1.234,
-      "speedup_factor": 2.36
-    }
-  }
-}
-```
-
-### Status Codes
-
-| Status | Meaning | Action |
-|--------|---------|--------|
-| `PASSED` | All checks passed | ✓ Solution is correct and fast |
-| `INCORRECT_NUMERICAL` | Numerical error exceeds tolerance | Check algorithm precision |
-| `INCORRECT_SHAPE` | Output shape mismatch | Verify output dimensions |
-| `INCORRECT_DTYPE` | Output dtype mismatch | Add `.to(dtype)` |
-| `RUNTIME_ERROR` | Execution error | Check code for bugs |
-| `TIMEOUT` | Execution timeout | Check for infinite loops |
-
-### Tolerance Formula
-
-Element-wise check (torch.allclose style):
+**Tolerance** (element-wise, `allclose`-style):
 
 ```
-|output - reference| <= atol + rtol * |reference|
+|output - reference| <= max_atol + max_rtol * |reference|
 ```
 
-Per workload, `tolerance` in `workload.jsonl` overrides the schema defaults. Built-in defaults (when a field is omitted) are `max_atol=1e-2`, `max_rtol=1e-2`, `required_matched_ratio=0.99`. The RMSNorm examples use `1e-3` / `1e-3` explicitly.
+A minimum fraction of elements must satisfy this (`required_matched_ratio`, default `0.99` if not set in workload). Workload-level `tolerance` overrides model defaults (`max_atol` / `max_rtol` default `1e-2` in schema; RMSNorm examples use `1e-3`).
 
-## Project Structure
+**Common statuses:** `PASSED`, `INCORRECT_NUMERICAL`, `INCORRECT_SHAPE`, `INCORRECT_DTYPE`, `RUNTIME_ERROR`, `TIMEOUT`, `INVALID_REFERENCE`, …
+
+## Project layout
 
 ```
 hpc_bench/
 ├── docs/
-│   └── arch.md              # Architecture & interface details
+│   └── arch.md              # Architecture & interface spec
 ├── examples/
-│   └── rmsnorm/
-│       ├── definition.json
-│       ├── workload.jsonl
-│       ├── pytorch/
-│       ├── cuda_cpp/
-│       ├── triton/
-│       ├── cute_dsl/
-│       ├── cutile/
-│       ├── cutlass/
-│       └── cudnn/
+│   └── rmsnorm/             # Full multi-backend example
 ├── scripts/
-│   └── run_dataset.py       # Batch evaluation helper
+│   └── run_dataset.py
 ├── tests/
-│   └── e2e/                 # pytest end-to-end tests
+│   └── e2e/
 ├── src/hpc_bench/
 │   ├── cli.py
-│   ├── core/
-│   │   ├── data/            # definition, workload, solution, trace, …
-│   │   └── bench/           # correctness, timing, io, config
+│   ├── core/data/           # definition, workload, solution, trace, …
+│   ├── core/bench/          # correctness, timing, io, config
 │   └── driver/
 │       └── problem_packager.py
 └── pyproject.toml
 ```
 
-## Troubleshooting
-
-### ImportError: No module named 'hpc_bench'
-
-```bash
-export PYTHONPATH=/home/zhangxa/codes/hpc_bench/src:$PYTHONPATH
-```
-
-### CUDA Out of Memory
-
-Reduce workload batch sizes or use `--max-workloads` to limit concurrent tests.
-
-### Numerical Errors
-
-1. Check dtype conversions (use `to(torch.float32)` for intermediate compute)
-2. Verify epsilon values are handled correctly
-3. Consider tolerance adjustment for specific workloads
-
-### Compilation Errors (C++/CUDA)
-
-- Install a CUDA toolkit compatible with your PyTorch build; check `nvcc --version` and `nvidia-smi`.
-- Install **ninja** if PyTorch’s extension build fails (`pip install ninja` or distro package).
-- Device code must be in **`.cu`** files so `nvcc` compiles them; plain `.cpp` may invoke the host compiler only and miss `cuda_runtime.h`.
-- If you see errors about virtual architectures, ensure the driver uses `-gencode=arch=compute_XX,code=sm_XX` (the packager does this for `LOCAL`).
-
-### Stale `hpc-bench` after git pull
-
-Reinstall or run from source so CLI matches the repo:
-
-```bash
-pip install -e .
-# or: PYTHONPATH=src python -m hpc_bench.cli ...
-```
-
-### Tests
+## Testing
 
 ```bash
 pip install pytest
+cd hpc_bench
 PYTHONPATH=src pytest tests/
 ```
 
-CUDA-heavy e2e tests are marked `@pytest.mark.cuda`; use `pytest -m "not cuda"` on CPU-only machines.
+**Markers** (see `pytest.ini`):
 
-## Advanced Topics
+- `cuda` — needs NVIDIA GPU + CUDA  
+- `triton` — Triton + CUDA  
+- `cute_dsl` — Cutlass/CuTe Python + CUDA  
+- `cutile` — `cuda.tile` + CUDA  
+- `cutlass_ext` — builds CUTLASS-tagged extension  
 
-See [docs/arch.md](docs/arch.md) for:
-- Detailed architecture design
-- API reference
-- Extending the framework
-- Compatibility notes with SOL-ExecBench
+Examples:
+
+```bash
+pytest -m "not cuda"              # CPU-only machines
+pytest -m "not triton and not cutile and not cute_dsl"   # minimal deps
+```
+
+## Troubleshooting
+
+| Issue | What to try |
+|-------|-------------|
+| `No module named 'hpc_bench'` | `pip install -e .` or `PYTHONPATH=src` |
+| Stale CLI after `git pull` | Reinstall editable or run `python -m hpc_bench.cli` from `src` on `PYTHONPATH` |
+| `cuda_runtime.h` / host `c++` on `.cpp` | Rename device code to **`.cu`** |
+| `sm_8` / invalid `-arch` | Use current `hpc_bench` (capability → `compute_XX` + `sm_XX`) |
+| `ninja` / build failures | `pip install ninja`; ensure `nvcc` matches PyTorch CUDA |
+| `CUDNN_STATUS_NOT_SUPPORTED` on BF16 reduce | Prefer FP32 reduction path (see `examples/rmsnorm/cudnn/kernel.cu`) |
+| OOM | Smaller `batch_size` in workloads; fewer workloads in `workload.jsonl` |
+| Numerical drift | Match reference dtype flow (e.g. fp32 for reductions); relax `tolerance` if justified |
+
+## Documentation
+
+- **[docs/arch.md](docs/arch.md)** — architecture, data model details, extension points, SOL-ExecBench alignment notes.
+- **[skills/openclaw-hpc-bench/SKILL.md](skills/openclaw-hpc-bench/SKILL.md)** — Cursor/OpenClaw-style agent skill: how to benchmark custom kernels with hpc_bench.
 
 ## License
 
