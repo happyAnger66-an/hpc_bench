@@ -19,6 +19,7 @@ class SupportedLanguages(str, Enum):
     CUTE_DSL = "cute_dsl"
     CUTILE = "cutile"
     CUDNN_FRONTEND = "cudnn_frontend"
+    TILELANG = "tilelang"
     CUTLASS = "cutlass"
     CUDNN = "cudnn"
     CUBLAS = "cublas"
@@ -104,6 +105,7 @@ class BuildSpec(BaseModelWithDocstrings):
             SupportedLanguages.CUTE_DSL,
             SupportedLanguages.CUTILE,
             SupportedLanguages.CUDNN_FRONTEND,
+            SupportedLanguages.TILELANG,
         ]
         cpp_languages = [
             SupportedLanguages.CUTLASS,

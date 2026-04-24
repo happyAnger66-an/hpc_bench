@@ -28,7 +28,7 @@ def _load_solution(subdir: str) -> Solution:
 
 class TestOptionalBackendFiles:
     def test_solution_json_exist(self):
-        for sub in ("cute_dsl", "cutile", "cutlass", "cudnn"):
+        for sub in ("cute_dsl", "cutile", "cutlass", "cudnn", "tilelang"):
             assert (RMSNORM_DIR / sub / "solution.json").exists()
 
 

@@ -1,0 +1,14 @@
+{
+  "name": "rmsnorm_tilelang_v1",
+  "definition": "rmsnorm_h4096",
+  "author": "hpc_bench",
+  "description": "RMSNorm: TileLang fused kernel (bf16 I/O, fp32 reduce), hidden_size=4096",
+  "spec": {
+    "languages": ["tilelang"],
+    "target_hardware": ["LOCAL"],
+    "entry_point": "kernel.py::run",
+    "destination_passing_style": true,
+    "dependencies": ["torch", "tilelang"]
+  },
+  "sources": [{ "path": "kernel.py" }]
+}
