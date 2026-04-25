@@ -1,5 +1,5 @@
 ---
-name: openclaw-hpc-bench
+name: hpc-bench
 description: >-
   Benchmarks custom GPU kernels and operators with the hpc_bench framework using
   definition.json, workload.jsonl, and solution.json (correctness vs reference +
@@ -10,7 +10,7 @@ description: >-
 
 # 使用 hpc_bench 对自写算子做性能评测
 
-本 skill 说明如何让用户实现的算子在 **hpc_bench** 下完成：**数值正确性**（相对 `definition.reference`）与 **GPU 耗时**（CUDA events，含 warmup）。适用于 OpenClaw / Cursor Agent 在仓库内或用户环境中编排评测流程。
+本 skill 说明如何让用户实现的算子在 **hpc_bench** 下完成：**数值正确性**（相对 `definition.reference`）与 **GPU 耗时**（CUDA events，含 warmup）
 
 ## 1. 前置条件
 
